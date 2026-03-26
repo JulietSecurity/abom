@@ -1,0 +1,16 @@
+name: Complex
+on: push
+jobs:
+  lint:
+    uses: org/repo/.github/workflows/lint.yml@main
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@abcdef1234567890abcdef1234567890abcdef12
+      - name: Local Action
+        uses: ./local-action
+      - name: Docker Step
+        uses: docker://alpine:3.18
+      - name: Subdir Action
+        uses: owner/repo/subdir@v1

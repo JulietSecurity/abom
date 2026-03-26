@@ -1,0 +1,38 @@
+version: 2
+
+builds:
+  - main: .
+    binary: abom
+    ldflags:
+      - -s -w
+      - -X github.com/julietsecurity/abom/cmd.version={{.Version}}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        format: zip
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+
+brews:
+  - repository:
+      owner: JulietSecurity
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: https://github.com/JulietSecurity/abom
+    description: "Actions Bill of Materials — map your GitHub Actions supply chain"
+    install: |
+      bin.install "abom"
