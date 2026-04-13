@@ -8,6 +8,8 @@ import (
 
 	"github.com/julietsecurity/abom/pkg/advisory"
 	"github.com/julietsecurity/abom/pkg/model"
+	"github.com/julietsecurity/abom/pkg/resolver"
+	"github.com/julietsecurity/abom/pkg/warnings"
 	"github.com/spf13/cobra"
 )
 
@@ -25,6 +27,19 @@ func init() {
 }
 
 func runCheck(cmd *cobra.Command, args []string) error {
+	if verifyShas && offline {
+		return fmt.Errorf("--verify-shas requires network; remove --offline")
+	}
+
+	col := &warnings.Collector{}
+
+	if verifyShas && githubToken == "" {
+		col.Emit(warnings.Warning{
+			Category: warnings.CategoryRateLimit,
+			Message:  "--verify-shas running anonymously; 60 API calls/hour, set --github-token for realistic limits",
+		})
+	}
+
 	var r io.Reader
 
 	if useStdin {
@@ -55,22 +70,36 @@ func runCheck(cmd *cobra.Command, args []string) error {
 
 	abom.CollectActions()
 
-	if abom.Summary.Compromised == 0 {
-		fmt.Println("No compromised actions found.")
-		return nil
+	if verifyShas {
+		if !quiet {
+			fmt.Fprintf(os.Stderr, "Verifying pinned SHAs against upstream refs...\n")
+		}
+		resolver.VerifyABOMShas(&abom, resolver.NewGitHubSHAVerifier(githubToken), col)
 	}
 
-	fmt.Fprintf(os.Stderr, "Found %d compromised action(s):\n\n", abom.Summary.Compromised)
-	for _, ref := range abom.Actions {
-		if ref.Compromised {
-			fmt.Fprintf(os.Stdout, "  %s  (%s)\n", ref.Raw, ref.Advisory)
-			for _, by := range ref.ReferencedBy {
-				fmt.Fprintf(os.Stdout, "    referenced by: %s\n", by)
+	if abom.Summary.Compromised == 0 {
+		fmt.Println("No compromised actions found.")
+	} else {
+		fmt.Fprintf(os.Stderr, "Found %d compromised action(s):\n\n", abom.Summary.Compromised)
+		for _, ref := range abom.Actions {
+			if ref.Compromised {
+				fmt.Fprintf(os.Stdout, "  %s  (%s)\n", ref.Raw, ref.Advisory)
+				for _, by := range ref.ReferencedBy {
+					fmt.Fprintf(os.Stdout, "    referenced by: %s\n", by)
+				}
 			}
 		}
 	}
 
-	// Exit code 1 if compromised actions found
-	os.Exit(1)
+	if col.Count() > 0 {
+		col.Print(os.Stderr)
+	}
+
+	if abom.Summary.Compromised > 0 {
+		return &exitError{code: 1}
+	}
+	if failOnWarnings && col.Count() > 0 {
+		return &exitError{code: 2}
+	}
 	return nil
 }

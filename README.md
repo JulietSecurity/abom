@@ -49,7 +49,8 @@ Every post-incident guide from CrowdStrike, Wiz, Snyk, and Microsoft tells you t
 - **Remote scanning** — scan any public GitHub repo without cloning: `abom scan github.com/org/repo`
 - **Advisory database** — built-in + auto-updated database of known-compromised actions
 - **Standard BOM formats** — output as CycloneDX 1.5 or SPDX 2.3 for integration with Dependency-Track, Grype, and other tooling
-- **CI gate** — exits with code `1` when compromised actions are found
+- **SHA verification** — optionally verify that pinned SHAs are actually reachable from the upstream repo, catching fork-sourced and force-pushed-away commits (`--verify-shas`)
+- **CI gate** — exits non-zero when compromised actions are found or (with `--fail-on-warnings`) when any advisory warning is emitted
 - **Fast** — caches resolved actions locally, uses `raw.githubusercontent.com` to avoid API rate limits
 
 ## Installation
@@ -106,6 +107,37 @@ Use as a CI gate:
   run: abom scan . --check
 ```
 
+Block on fork-sourced SHA pins as well:
+
+```yaml
+- name: Check Actions supply chain
+  run: abom scan . --check --verify-shas --fail-on-warnings
+  env:
+    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+```
+
+## Verifying pinned SHAs
+
+Pinning an action to a SHA (e.g. `actions/checkout@a1b2c3...`) is the recommended defense against tag-swap attacks. But GitHub's object store is shared across a repo and its forks — so a SHA that exists only on a fork (or was force-pushed out of the upstream's history) will still resolve successfully when a workflow runs. The pin protects you from tag mutation, but not from a commit that was never in the upstream's ref graph.
+
+`--verify-shas` hits the GitHub commits API for each SHA-pinned reference and emits a warning when the SHA isn't reachable from the claimed repo's refs. It doesn't change resolution behavior — ABOM still builds the same dependency tree GitHub would — it just surfaces the discrepancy.
+
+```bash
+abom scan . --verify-shas --github-token $GITHUB_TOKEN
+```
+
+Combine with `--fail-on-warnings` to block CI on the finding:
+
+```bash
+abom scan . --verify-shas --fail-on-warnings --github-token $GITHUB_TOKEN
+```
+
+**What a warning means:** the SHA is not reachable from `owner/repo`'s refs. That may be a fork-only commit, a force-pushed-away commit, or a mistaken pin. It does **not** necessarily mean the SHA was tampered with.
+
+**Exit codes:** `0` clean, `1` compromised action (or runtime error), `2` warnings emitted with `--fail-on-warnings`. When both conditions hold, exit `1` wins.
+
+**Rate limit caveat:** `--verify-shas` makes an extra API call per unique SHA. Anonymous requests are capped at 60/hour — set `--github-token` (or `GITHUB_TOKEN`) for a realistic 5000/hour budget.
+
 ## How detection works
 
 `abom` finds compromised dependencies through three layers that grep will never reach:
@@ -146,6 +178,8 @@ Current advisories:
 | `--file` | `-f` | Write output to file instead of stdout | stdout |
 | `--check` | | Flag known-compromised actions | `false` |
 | `--depth` | `-d` | Max recursion depth for transitive deps | `10` |
+| `--verify-shas` | | Verify pinned SHAs are reachable from upstream repo refs | `false` |
+| `--fail-on-warnings` | | Exit `2` if any warnings were emitted | `false` |
 | `--github-token` | | GitHub token for API requests (also reads `GITHUB_TOKEN`) | |
 | `--no-network` | | Skip resolving transitive dependencies (local parsing only) | `false` |
 | `--offline` | | Use built-in advisory data only, skip remote fetch | `false` |

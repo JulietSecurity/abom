@@ -9,6 +9,7 @@ import (
 	"github.com/julietsecurity/abom/pkg/output"
 	"github.com/julietsecurity/abom/pkg/parser"
 	"github.com/julietsecurity/abom/pkg/resolver"
+	"github.com/julietsecurity/abom/pkg/warnings"
 	"github.com/spf13/cobra"
 )
 
@@ -42,6 +43,22 @@ func init() {
 
 func runScan(cmd *cobra.Command, args []string) error {
 	target := args[0]
+
+	if verifyShas && offline {
+		return fmt.Errorf("--verify-shas requires network; remove --offline")
+	}
+	if verifyShas && noNetwork {
+		return fmt.Errorf("--verify-shas requires network; remove --no-network")
+	}
+
+	col := &warnings.Collector{}
+
+	if verifyShas && githubToken == "" {
+		col.Emit(warnings.Warning{
+			Category: warnings.CategoryRateLimit,
+			Message:  "--verify-shas running anonymously; 60 API calls/hour, set --github-token for realistic limits",
+		})
+	}
 
 	if !quiet {
 		fmt.Fprintf(os.Stderr, "Scanning %s...\n", target)
@@ -128,6 +145,13 @@ func runScan(cmd *cobra.Command, args []string) error {
 
 	abom.CollectActions()
 
+	if verifyShas {
+		if !quiet {
+			fmt.Fprintf(os.Stderr, "Verifying pinned SHAs against upstream refs...\n")
+		}
+		resolver.VerifyABOMShas(abom, resolver.NewGitHubSHAVerifier(githubToken), col)
+	}
+
 	// Write output
 	w := os.Stdout
 	if outputFile != "" {
@@ -161,9 +185,16 @@ func runScan(cmd *cobra.Command, args []string) error {
 		return formatErr
 	}
 
-	// Exit code 1 if compromised actions found (usable as CI gate)
+	if col.Count() > 0 {
+		col.Print(os.Stderr)
+	}
+
+	// Exit code precedence: compromised > warnings > clean.
 	if checkAdvisory && abom.Summary.Compromised > 0 {
-		os.Exit(1)
+		return &exitError{code: 1}
+	}
+	if failOnWarnings && col.Count() > 0 {
+		return &exitError{code: 2}
 	}
 
 	return nil
