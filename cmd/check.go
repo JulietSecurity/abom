@@ -30,6 +30,9 @@ func runCheck(cmd *cobra.Command, args []string) error {
 	if verifyShas && offline {
 		return fmt.Errorf("--verify-shas requires network; remove --offline")
 	}
+	if resolveRefs && offline {
+		return fmt.Errorf("--resolve-refs requires network; remove --offline")
+	}
 
 	col := &warnings.Collector{}
 
@@ -37,6 +40,12 @@ func runCheck(cmd *cobra.Command, args []string) error {
 		col.Emit(warnings.Warning{
 			Category: warnings.CategoryRateLimit,
 			Message:  "--verify-shas running anonymously; 60 API calls/hour, set --github-token for realistic limits",
+		})
+	}
+	if resolveRefs && githubToken == "" {
+		col.Emit(warnings.Warning{
+			Category: warnings.CategoryRateLimit,
+			Message:  "--resolve-refs running anonymously; 60 API calls/hour, set --github-token for realistic limits",
 		})
 	}
 
@@ -69,6 +78,13 @@ func runCheck(cmd *cobra.Command, args []string) error {
 	db.CheckAll(&abom)
 
 	abom.CollectActions()
+
+	if resolveRefs {
+		if !quiet {
+			fmt.Fprintln(os.Stderr, "Resolving tag and branch refs to commit SHAs...")
+		}
+		resolver.ResolveABOMRefs(&abom, resolver.NewGitHubRefResolver(githubToken), col)
+	}
 
 	if verifyShas {
 		if !quiet {

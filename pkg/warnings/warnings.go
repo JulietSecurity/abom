@@ -16,6 +16,7 @@ type Category string
 const (
 	CategorySHAUnreachable Category = "sha-unreachable"
 	CategoryRateLimit      Category = "rate-limit"
+	CategoryRefResolve     Category = "ref-resolve"
 )
 
 type Warning struct {
