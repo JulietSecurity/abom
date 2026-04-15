@@ -14,6 +14,7 @@ var (
 	noCache        bool
 	offline        bool
 	verifyShas     bool
+	resolveRefs    bool
 	failOnWarnings bool
 	version        = "dev"
 )
@@ -75,6 +76,7 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&noCache, "no-cache", false, "Force fresh advisory fetch, skip cache")
 	rootCmd.PersistentFlags().BoolVar(&offline, "offline", false, "Skip advisory fetch, use built-in data only")
 	rootCmd.PersistentFlags().BoolVar(&verifyShas, "verify-shas", false, "Verify SHA-pinned actions are reachable from upstream repo refs (requires --github-token for realistic rate limits; requires network)")
+	rootCmd.PersistentFlags().BoolVar(&resolveRefs, "resolve-refs", false, "Resolve tag and branch refs to the commit SHA they currently point to, stored alongside the original ref (requires --github-token for realistic rate limits; requires network)")
 	rootCmd.PersistentFlags().BoolVar(&failOnWarnings, "fail-on-warnings", false, "Exit 2 if any warnings were emitted during the run")
 	rootCmd.Version = version
 }

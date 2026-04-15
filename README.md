@@ -50,6 +50,7 @@ Every post-incident guide from CrowdStrike, Wiz, Snyk, and Microsoft tells you t
 - **Advisory database** — built-in + auto-updated database of known-compromised actions
 - **Standard BOM formats** — output as CycloneDX 1.5 or SPDX 2.3 for integration with Dependency-Track, Grype, and other tooling
 - **SHA verification** — optionally verify that pinned SHAs are actually reachable from the upstream repo, catching fork-sourced and force-pushed-away commits (`--verify-shas`)
+- **Ref resolution** — optionally resolve tag and branch refs to the commit SHA they point to at BOM-generation time, turning a mutable-tag BOM into a stable evidentiary record (`--resolve-refs`)
 - **CI gate** — exits non-zero when compromised actions are found or (with `--fail-on-warnings`) when any advisory warning is emitted
 - **Fast** — caches resolved actions locally, uses `raw.githubusercontent.com` to avoid API rate limits
 
@@ -138,6 +139,33 @@ abom scan . --verify-shas --fail-on-warnings --github-token $GITHUB_TOKEN
 
 **Rate limit caveat:** `--verify-shas` makes an extra API call per unique SHA. Anonymous requests are capped at 60/hour — set `--github-token` (or `GITHUB_TOKEN`) for a realistic 5000/hour budget.
 
+## Resolving tag and branch refs
+
+Git tags are mutable. A workflow pinned to `actions/checkout@v4` today may resolve to a different commit next week if the maintainer re-points the tag. This means a BOM with tag refs is only a semi-reliable record of what actually ran. Branches (`main`, `master`) are even more mutable.
+
+For teams generating BOMs as audit or compliance evidence, `--resolve-refs` calls the GitHub commits API to look up the commit SHA each tag or branch currently points to and records it in `resolved_sha` alongside the original ref. The original pinning is preserved so contributor intent stays visible.
+
+```bash
+abom scan . --resolve-refs --github-token $GITHUB_TOKEN
+```
+
+Output (JSON) gets a stable record of what was actually resolved at generation time:
+
+```json
+{
+  "uses": "actions/checkout@v4",
+  "ref": "v4",
+  "ref_type": "tag",
+  "resolved_sha": "34e114876b0b11c390a56381ad16ebd13914f8d5"
+}
+```
+
+**Scope:** tag and branch refs only. SHA-pinned refs are already immutable and skipped. Docker and local actions are also skipped.
+
+**Interaction with `--verify-shas`:** orthogonal. `--verify-shas` walks SHA-pinned refs; `--resolve-refs` populates `resolved_sha` for tag and branch refs. Running both together populates both signals.
+
+**Rate limit caveat:** same as `--verify-shas` — one API call per unique tag or branch ref, so a token is effectively required for any workflow with more than a handful of tagged actions.
+
 ## How detection works
 
 `abom` finds compromised dependencies through three layers that grep will never reach:
@@ -179,6 +207,7 @@ Current advisories:
 | `--check` | | Flag known-compromised actions | `false` |
 | `--depth` | `-d` | Max recursion depth for transitive deps | `10` |
 | `--verify-shas` | | Verify pinned SHAs are reachable from upstream repo refs | `false` |
+| `--resolve-refs` | | Resolve tag and branch refs to current commit SHAs | `false` |
 | `--fail-on-warnings` | | Exit `2` if any warnings were emitted | `false` |
 | `--github-token` | | GitHub token for API requests (also reads `GITHUB_TOKEN`) | |
 | `--no-network` | | Skip resolving transitive dependencies (local parsing only) | `false` |
