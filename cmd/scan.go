@@ -147,7 +147,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 
 	if verifyShas {
 		if !quiet {
-			fmt.Fprintf(os.Stderr, "Verifying pinned SHAs against upstream refs...\n")
+			fmt.Fprintln(os.Stderr, "Verifying pinned SHAs against upstream refs...")
 		}
 		resolver.VerifyABOMShas(abom, resolver.NewGitHubSHAVerifier(githubToken), col)
 	}
