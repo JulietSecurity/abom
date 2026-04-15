@@ -1,61 +1,149 @@
 {
-  "schema_version": "1.0.0",
-  "last_updated": "2026-03-26T00:00:00Z",
+  "last_updated": "2026-04-15T00:00:00Z",
   "advisories": [
     {
-      "id": "ABOM-2026-001",
-      "title": "Trivy GitHub Actions supply chain compromise",
-      "cve": "CVE-2026-33634",
-      "cvss": 9.4,
-      "published": "2026-03-19",
-      "updated": "2026-03-26",
-      "status": "active",
-      "description": "Compromised credentials from a non-atomic credential rotation allowed an attacker to force-push malicious payloads to 76 of 77 trivy-action tags and all setup-trivy tags. The injected code was an infostealer that exfiltrated CI secrets, SSH keys, cloud credentials, and tokens via encrypted channels. Exposure window was approximately 12 hours for trivy-action and 4 hours for setup-trivy starting 2026-03-19 ~17:43 UTC.",
-      "references": [
-        "https://github.com/aquasecurity/trivy/security/advisories/GHSA-69fq-xp46-6x23",
-        "https://nvd.nist.gov/vuln/detail/CVE-2026-33634",
-        "https://github.com/aquasecurity/trivy/discussions/10425"
+      "schema_version": "1.7.5",
+      "id": "ABOM-2026-002",
+      "modified": "2026-04-11T00:00:00Z",
+      "published": "2026-04-11T00:00:00Z",
+      "aliases": ["CVE-2025-30066", "GHSA-mrrh-fwg8-r2c3"],
+      "summary": "tj-actions/changed-files compromise",
+      "details": "Allows for information disclosure of secrets including, but not limited to, valid access keys, GitHub Personal Access Tokens (PATs), npm tokens, and private RSA keys.",
+      "severity": [
+        {
+          "type": "CVSS_V3",
+          "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:N/A:N"
+        }
       ],
-      "affected_actions": [
+      "affected": [
         {
-          "uses": "aquasecurity/trivy-action",
-          "tool_names": ["trivy"],
-          "affected_refs": {
-            "tag_range": ">=v0.0.1 <=v0.34.2",
-            "safe_tags": ["v0.35.0"],
-            "safe_shas": []
+          "package": {
+            "ecosystem": "GitHub Actions",
+            "name": "tj-actions/changed-files"
           },
-          "affected_period": {
-            "from": "2026-03-19T17:43:00Z",
-            "to": "2026-03-20T05:40:00Z"
-          }
-        },
-        {
-          "uses": "aquasecurity/setup-trivy",
-          "tool_names": ["trivy"],
-          "affected_refs": {
-            "tag_range": ">=v0.2.0 <=v0.2.6",
-            "safe_tags": ["v0.2.6"],
-            "safe_shas": []
-          },
-          "affected_period": {
-            "from": "2026-03-19T17:43:00Z",
-            "to": "2026-03-19T21:44:00Z"
+          "ranges": [
+            {
+              "type": "ECOSYSTEM",
+              "events": [
+                {"introduced": "v0.0.1"},
+                {"fixed": "v46.0.1"}
+              ]
+            }
+          ],
+          "ecosystem_specific": {
+            "abom": {
+              "affected_period": {
+                "from": "2025-03-14T00:00:00Z",
+                "to": "2025-03-16T00:00:00Z"
+              }
+            }
           }
         }
       ],
-      "indicators": {
-        "docker_images": ["aquasec/trivy:0.69.4", "aquasec/trivy:0.69.5", "aquasec/trivy:0.69.6"],
-        "repos_to_check": ["tpcp-docs"],
-        "notes": "If exfiltration failed and INPUT_GITHUB_PAT was set, the payload created a public repo named tpcp-docs on the victim's GitHub account and uploaded stolen data as a release asset. Check your org for unexpected repos with this name."
-      },
-      "recommended_actions": [
-        "Pin to commit SHA or update to safe tag (trivy-action v0.35.0, setup-trivy v0.2.6)",
-        "Rotate all secrets accessible to affected CI pipelines immediately",
-        "Audit downstream artifacts built during the exposure window",
-        "Check for unauthorized repos named tpcp-docs in your GitHub org",
-        "Verify trivy binary integrity — safe versions are v0.69.2 and v0.69.3"
-      ]
+      "references": [
+        {"type": "ADVISORY", "url": "https://www.cisa.gov/news-events/alerts/2025/03/18/supply-chain-compromise-third-party-tj-actionschanged-files-cve-2025-30066-and-reviewdogaction"},
+        {"type": "ADVISORY", "url": "https://github.com/advisories/GHSA-mrrh-fwg8-r2c3"},
+        {"type": "ADVISORY", "url": "https://nvd.nist.gov/vuln/detail/CVE-2025-30066"}
+      ],
+      "database_specific": {
+        "abom": {
+          "recommended_actions": [
+            "Pin to commit SHA or update to safe tag (changed-files v46.0.1)",
+            "Rotate all secrets accessible to affected CI pipelines immediately",
+            "Audit downstream artifacts built during the exposure window"
+          ]
+        }
+      }
+    },
+    {
+      "schema_version": "1.7.5",
+      "id": "ABOM-2026-001",
+      "modified": "2026-03-26T00:00:00Z",
+      "published": "2026-03-19T00:00:00Z",
+      "aliases": ["CVE-2026-33634", "GHSA-69fq-xp46-6x23"],
+      "summary": "Trivy GitHub Actions supply chain compromise",
+      "details": "Compromised credentials from a non-atomic credential rotation allowed an attacker to force-push malicious payloads to 76 of 77 trivy-action tags and all setup-trivy tags. The injected code was an infostealer that exfiltrated CI secrets, SSH keys, cloud credentials, and tokens via encrypted channels. Exposure window was approximately 12 hours for trivy-action and 4 hours for setup-trivy starting 2026-03-19 ~17:43 UTC.",
+      "severity": [
+        {
+          "type": "CVSS_V3",
+          "score": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"
+        }
+      ],
+      "affected": [
+        {
+          "package": {
+            "ecosystem": "GitHub Actions",
+            "name": "aquasecurity/trivy-action"
+          },
+          "ranges": [
+            {
+              "type": "ECOSYSTEM",
+              "events": [
+                {"introduced": "v0.0.1"},
+                {"fixed": "v0.35.0"}
+              ]
+            }
+          ],
+          "ecosystem_specific": {
+            "abom": {
+              "tool_names": ["trivy"],
+              "affected_period": {
+                "from": "2026-03-19T17:43:00Z",
+                "to": "2026-03-20T05:40:00Z"
+              }
+            }
+          }
+        },
+        {
+          "package": {
+            "ecosystem": "GitHub Actions",
+            "name": "aquasecurity/setup-trivy"
+          },
+          "ranges": [
+            {
+              "type": "ECOSYSTEM",
+              "events": [
+                {"introduced": "v0.2.0"},
+                {"fixed": "v0.2.6"}
+              ]
+            }
+          ],
+          "ecosystem_specific": {
+            "abom": {
+              "tool_names": ["trivy"],
+              "affected_period": {
+                "from": "2026-03-19T17:43:00Z",
+                "to": "2026-03-19T21:44:00Z"
+              }
+            }
+          }
+        }
+      ],
+      "references": [
+        {"type": "ADVISORY", "url": "https://github.com/aquasecurity/trivy/security/advisories/GHSA-69fq-xp46-6x23"},
+        {"type": "ADVISORY", "url": "https://nvd.nist.gov/vuln/detail/CVE-2026-33634"},
+        {"type": "DISCUSSION", "url": "https://github.com/aquasecurity/trivy/discussions/10425"}
+      ],
+      "database_specific": {
+        "abom": {
+          "indicators": {
+            "docker_images": [
+              "aquasec/trivy:0.69.4",
+              "aquasec/trivy:0.69.5",
+              "aquasec/trivy:0.69.6"
+            ],
+            "repos_to_check": ["tpcp-docs"],
+            "notes": "If exfiltration failed and INPUT_GITHUB_PAT was set, the payload created a public repo named tpcp-docs on the victim's GitHub account and uploaded stolen data as a release asset. Check your org for unexpected repos with this name."
+          },
+          "recommended_actions": [
+            "Pin to commit SHA or update to safe tag (trivy-action v0.35.0, setup-trivy v0.2.6)",
+            "Rotate all secrets accessible to affected CI pipelines immediately",
+            "Audit downstream artifacts built during the exposure window",
+            "Check for unauthorized repos named tpcp-docs in your GitHub org",
+            "Verify trivy binary integrity (safe versions are v0.69.2 and v0.69.3)"
+          ]
+        }
+      }
     }
   ]
 }

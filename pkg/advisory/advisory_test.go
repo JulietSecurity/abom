@@ -7,7 +7,6 @@ import (
 )
 
 func testDB() *Database {
-	// Load from builtin data directly, skip network
 	return NewDatabase(LoadOptions{Offline: true, Quiet: true})
 }
 
@@ -45,7 +44,7 @@ func TestCheck_TrivyActionVulnerable(t *testing.T) {
 			wantResult: "compromised",
 		},
 		{
-			name: "trivy-action max boundary",
+			name: "trivy-action max vulnerable",
 			ref: &model.ActionRef{
 				Owner:      "aquasecurity",
 				Repo:       "trivy-action",
@@ -57,7 +56,7 @@ func TestCheck_TrivyActionVulnerable(t *testing.T) {
 			wantResult: "compromised",
 		},
 		{
-			name: "trivy-action safe tag (above range and in safe_tags)",
+			name: "trivy-action fixed boundary",
 			ref: &model.ActionRef{
 				Owner:      "aquasecurity",
 				Repo:       "trivy-action",
@@ -68,7 +67,7 @@ func TestCheck_TrivyActionVulnerable(t *testing.T) {
 			wantHit: false,
 		},
 		{
-			name: "trivy-action above range but not in safe_tags",
+			name: "trivy-action above fixed",
 			ref: &model.ActionRef{
 				Owner:      "aquasecurity",
 				Repo:       "trivy-action",
@@ -91,7 +90,7 @@ func TestCheck_TrivyActionVulnerable(t *testing.T) {
 			wantResult: "compromised",
 		},
 		{
-			name: "setup-trivy safe tag",
+			name: "setup-trivy fixed",
 			ref: &model.ActionRef{
 				Owner:      "aquasecurity",
 				Repo:       "setup-trivy",
@@ -101,7 +100,7 @@ func TestCheck_TrivyActionVulnerable(t *testing.T) {
 			},
 		},
 		{
-			name: "setup-trivy above range",
+			name: "setup-trivy above fixed",
 			ref: &model.ActionRef{
 				Owner:      "aquasecurity",
 				Repo:       "setup-trivy",
@@ -157,6 +156,28 @@ func TestCheck_TrivyActionVulnerable(t *testing.T) {
 			ref: &model.ActionRef{
 				ActionType: model.ActionTypeLocal,
 				Path:       "./local-action",
+			},
+		},
+		{
+			name: "tj-actions vulnerable",
+			ref: &model.ActionRef{
+				Owner:      "tj-actions",
+				Repo:       "changed-files",
+				Ref:        "v45",
+				RefType:    model.RefTypeTag,
+				ActionType: model.ActionTypeStandard,
+			},
+			wantHit:    true,
+			wantResult: "compromised",
+		},
+		{
+			name: "tj-actions fixed",
+			ref: &model.ActionRef{
+				Owner:      "tj-actions",
+				Repo:       "changed-files",
+				Ref:        "v46.0.1",
+				RefType:    model.RefTypeTag,
+				ActionType: model.ActionTypeStandard,
 			},
 		},
 	}
@@ -233,26 +254,91 @@ func TestCheckAll(t *testing.T) {
 	}
 }
 
-func TestMatchesTagRange(t *testing.T) {
+func TestMatchesRange(t *testing.T) {
+	rng := &Range{
+		Type: "ECOSYSTEM",
+		Events: []Event{
+			{Introduced: "v0.0.1"},
+			{Fixed: "v0.35.0"},
+		},
+	}
+
 	tests := []struct {
 		version string
-		rangeS  string
 		want    bool
 	}{
-		{"v0.20.0", ">=v0.0.1 <=v0.34.2", true},
-		{"v0.0.1", ">=v0.0.1 <=v0.34.2", true},
-		{"v0.34.2", ">=v0.0.1 <=v0.34.2", true},
-		{"v0.35.0", ">=v0.0.1 <=v0.34.2", false},
-		{"v0.0.0", ">=v0.0.1 <=v0.34.2", false},
-		{"main", ">=v0.0.1 <=v0.34.2", false},
-		{"v1.0.0", ">=v0.0.1 <=v0.34.2", false},
+		{"v0.20.0", true},
+		{"v0.0.1", true},
+		{"v0.34.2", true},
+		{"v0.35.0", false},
+		{"v0.0.0", false},
+		{"v1.0.0", false},
+		{"main", false}, // non-numeric returns empty, falls before introduced
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.version, func(t *testing.T) {
-			got := matchesTagRange(tt.version, tt.rangeS)
+			got := matchesRange(tt.version, rng)
 			if got != tt.want {
-				t.Errorf("matchesTagRange(%q, %q) = %v, want %v", tt.version, tt.rangeS, got, tt.want)
+				t.Errorf("matchesRange(%q, range) = %v, want %v", tt.version, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMatchesRange_IntroducedZero(t *testing.T) {
+	// "0" is the OSV sentinel for "from the beginning."
+	rng := &Range{
+		Type: "ECOSYSTEM",
+		Events: []Event{
+			{Introduced: "0"},
+			{Fixed: "v2.0.0"},
+		},
+	}
+
+	tests := []struct {
+		version string
+		want    bool
+	}{
+		{"v0.0.1", true},
+		{"v1.5.0", true},
+		{"v2.0.0", false},
+		{"v3.0.0", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.version, func(t *testing.T) {
+			if got := matchesRange(tt.version, rng); got != tt.want {
+				t.Errorf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMatchesRange_LastAffected(t *testing.T) {
+	rng := &Range{
+		Type: "ECOSYSTEM",
+		Events: []Event{
+			{Introduced: "v1.0.0"},
+			{LastAffected: "v1.5.0"},
+		},
+	}
+
+	tests := []struct {
+		version string
+		want    bool
+	}{
+		{"v0.9.0", false},
+		{"v1.0.0", true},
+		{"v1.5.0", true},
+		{"v1.5.1", false},
+		{"v2.0.0", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.version, func(t *testing.T) {
+			if got := matchesRange(tt.version, rng); got != tt.want {
+				t.Errorf("got %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -263,10 +349,34 @@ func TestBuiltinDataLoads(t *testing.T) {
 	if len(db.db.Advisories) == 0 {
 		t.Fatal("builtin data should contain at least one advisory")
 	}
-	if db.db.Advisories[0].ID != "ABOM-2026-001" {
-		t.Errorf("first advisory ID = %q, want ABOM-2026-001", db.db.Advisories[0].ID)
+	ids := make(map[string]bool)
+	for _, adv := range db.db.Advisories {
+		ids[adv.ID] = true
+	}
+	if !ids["ABOM-2026-001"] {
+		t.Error("builtin data missing ABOM-2026-001")
+	}
+	if !ids["ABOM-2026-002"] {
+		t.Error("builtin data missing ABOM-2026-002")
 	}
 	if db.source != "builtin" {
 		t.Errorf("source = %q, want builtin", db.source)
+	}
+}
+
+func TestBuiltinDataIsOSV(t *testing.T) {
+	db := testDB()
+	for _, adv := range db.db.Advisories {
+		if adv.SchemaVersion == "" {
+			t.Errorf("%s missing schema_version", adv.ID)
+		}
+		if len(adv.Affected) == 0 {
+			t.Errorf("%s has no affected packages", adv.ID)
+		}
+		for _, aff := range adv.Affected {
+			if aff.Package.Ecosystem == "" {
+				t.Errorf("%s has affected entry with no ecosystem", adv.ID)
+			}
+		}
 	}
 }

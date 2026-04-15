@@ -14,58 +14,112 @@ import (
 )
 
 const (
-	remoteURL = "https://raw.githubusercontent.com/JulietSecurity/abom-advisories/main/db/advisories.json"
-	cacheTTL  = 1 * time.Hour
+	remoteURL    = "https://raw.githubusercontent.com/JulietSecurity/abom-advisories/main/db/advisories.json"
+	cacheTTL     = 1 * time.Hour
 	fetchTimeout = 5 * time.Second
+
+	ecosystemGitHubActions = "GitHub Actions"
 )
 
-// AdvisoryDB is the top-level JSON structure for the advisory database.
+// AdvisoryDB is the top-level structure for the advisory database file.
+// Individual advisories conform to the OSV schema (https://ossf.github.io/osv-schema/).
 type AdvisoryDB struct {
-	SchemaVersion string     `json:"schema_version"`
-	LastUpdated   string     `json:"last_updated"`
-	Advisories    []Advisory `json:"advisories"`
+	LastUpdated string     `json:"last_updated"`
+	Advisories  []Advisory `json:"advisories"`
 }
 
-// Advisory describes a known-compromised action.
+// Advisory is an OSV-shaped advisory entry with ABOM extensions.
 type Advisory struct {
-	ID                 string           `json:"id"`
-	Title              string           `json:"title"`
-	CVE                string           `json:"cve,omitempty"`
-	CVSS               float64          `json:"cvss,omitempty"`
-	Published          string           `json:"published"`
-	Updated            string           `json:"updated"`
-	Status             string           `json:"status"`
-	Description        string           `json:"description"`
-	References         []string         `json:"references,omitempty"`
-	AffectedActions    []AffectedAction `json:"affected_actions"`
-	Indicators         *Indicators      `json:"indicators,omitempty"`
-	RecommendedActions []string         `json:"recommended_actions,omitempty"`
+	SchemaVersion    string              `json:"schema_version"`
+	ID               string              `json:"id"`
+	Modified         string              `json:"modified"`
+	Published        string              `json:"published,omitempty"`
+	Withdrawn        string              `json:"withdrawn,omitempty"`
+	Aliases          []string            `json:"aliases,omitempty"`
+	Summary          string              `json:"summary,omitempty"`
+	Details          string              `json:"details,omitempty"`
+	Severity         []Severity          `json:"severity,omitempty"`
+	Affected         []Affected          `json:"affected"`
+	References       []Reference         `json:"references,omitempty"`
+	DatabaseSpecific DatabaseSpecific    `json:"database_specific,omitempty"`
 }
 
-// AffectedAction describes an action affected by an advisory.
-type AffectedAction struct {
-	Uses           string       `json:"uses"`
-	AffectedRefs   AffectedRefs `json:"affected_refs"`
-	AffectedPeriod struct {
-		From string  `json:"from"`
-		To   *string `json:"to"`
-	} `json:"affected_period"`
-	ToolNames []string `json:"tool_names,omitempty"`
+// Severity follows OSV's severity shape. For CVSS_V3 / CVSS_V4, Score is the
+// full vector string.
+type Severity struct {
+	Type  string `json:"type"`
+	Score string `json:"score"`
 }
 
-// AffectedRefs describes which refs of an action are affected.
-type AffectedRefs struct {
-	Tags     []string `json:"tags,omitempty"`
-	TagRange string   `json:"tag_range,omitempty"`
-	SafeTags []string `json:"safe_tags,omitempty"`
-	SafeSHAs []string `json:"safe_shas,omitempty"`
+// Affected describes a single affected package within an advisory.
+type Affected struct {
+	Package           Package           `json:"package"`
+	Ranges            []Range           `json:"ranges,omitempty"`
+	Versions          []string          `json:"versions,omitempty"`
+	EcosystemSpecific EcosystemSpecific `json:"ecosystem_specific,omitempty"`
+}
+
+// Package identifies the affected artifact.
+type Package struct {
+	Ecosystem string `json:"ecosystem"`
+	Name      string `json:"name"`
+}
+
+// Range describes an affected version range via a sequence of events.
+type Range struct {
+	Type   string  `json:"type"`
+	Events []Event `json:"events"`
+}
+
+// Event is a single point in a range's timeline. Exactly one of the fields
+// below is set per event.
+type Event struct {
+	Introduced   string `json:"introduced,omitempty"`
+	Fixed        string `json:"fixed,omitempty"`
+	LastAffected string `json:"last_affected,omitempty"`
+	Limit        string `json:"limit,omitempty"`
+}
+
+// Reference is a typed URL, per the OSV references spec.
+type Reference struct {
+	Type string `json:"type"`
+	URL  string `json:"url"`
+}
+
+// EcosystemSpecific holds per-package, ecosystem-scoped extensions.
+type EcosystemSpecific struct {
+	ABOM *ABOMEcosystemFields `json:"abom,omitempty"`
+}
+
+// ABOMEcosystemFields are GitHub-Actions-specific ABOM extensions.
+type ABOMEcosystemFields struct {
+	ToolNames      []string        `json:"tool_names,omitempty"`
+	AffectedPeriod *AffectedPeriod `json:"affected_period,omitempty"`
+}
+
+// AffectedPeriod is an incident time window. The To field is intentionally
+// string (not *string) — an empty string denotes an ongoing incident.
+type AffectedPeriod struct {
+	From string `json:"from"`
+	To   string `json:"to,omitempty"`
+}
+
+// DatabaseSpecific holds advisory-wide, database-scoped extensions.
+type DatabaseSpecific struct {
+	ABOM *ABOMDatabaseFields `json:"abom,omitempty"`
+}
+
+// ABOMDatabaseFields are ABOM-wide extensions to the OSV schema.
+type ABOMDatabaseFields struct {
+	Indicators         *Indicators `json:"indicators,omitempty"`
+	RecommendedActions []string    `json:"recommended_actions,omitempty"`
 }
 
 // Indicators contains IOCs for an advisory.
 type Indicators struct {
-	DockerImages  []string `json:"docker_images,omitempty"`
-	ReposToCheck  []string `json:"repos_to_check,omitempty"`
-	Notes         string   `json:"notes,omitempty"`
+	DockerImages []string `json:"docker_images,omitempty"`
+	ReposToCheck []string `json:"repos_to_check,omitempty"`
+	Notes        string   `json:"notes,omitempty"`
 }
 
 // LoadOptions configures how the advisory database is loaded.
@@ -85,7 +139,6 @@ type Database struct {
 // NewDatabase loads the advisory database using the fallback chain:
 // remote -> cache -> builtin.
 func NewDatabase(opts LoadOptions) *Database {
-	// Try remote first (unless offline)
 	if !opts.Offline {
 		if db, err := loadRemote(opts); err == nil {
 			if !opts.NoCache {
@@ -95,7 +148,6 @@ func NewDatabase(opts LoadOptions) *Database {
 		}
 	}
 
-	// Try cache (unless no-cache)
 	if !opts.NoCache && !opts.Offline {
 		if db, fresh, err := loadCache(); err == nil {
 			if !fresh && !opts.Quiet {
@@ -105,7 +157,6 @@ func NewDatabase(opts LoadOptions) *Database {
 		}
 	}
 
-	// Fall back to builtin
 	db, _ := parseAdvisoryDB(builtinData)
 	if !opts.Offline && !opts.Quiet {
 		fmt.Fprintf(os.Stderr, "Warning: using built-in advisory data from %s. Run with network access for latest advisories.\n", db.LastUpdated)
@@ -113,36 +164,43 @@ func NewDatabase(opts LoadOptions) *Database {
 	return &Database{db: *db, source: "builtin"}
 }
 
-// Check returns the first matching advisory for an action ref, or nil.
-// If the ref is a SHA not in safe_shas, returns the advisory with a
-// "verify manually" note.
+// Check returns the first matching advisory for an action ref, along with a
+// match reason: "compromised" (version in affected range), "verify-sha"
+// (SHA-pinned and can't be version-compared), or "detected-tool" (matched via
+// wrapper detection / IoC).
 func (d *Database) Check(ref *model.ActionRef) (*Advisory, string) {
 	for i := range d.db.Advisories {
 		adv := &d.db.Advisories[i]
-		if adv.Status == "withdrawn" {
+		if adv.Withdrawn != "" {
 			continue
 		}
-		for _, aa := range adv.AffectedActions {
-			if matchResult := matchAction(ref, &aa); matchResult != "" {
-				return adv, matchResult
+
+		for _, aff := range adv.Affected {
+			if result := matchAffected(ref, &aff); result != "" {
+				return adv, result
 			}
 		}
-		// Check docker image indicators
-		if ref.ActionType == model.ActionTypeDocker && adv.Indicators != nil {
-			for _, img := range adv.Indicators.DockerImages {
+
+		if ref.ActionType == model.ActionTypeDocker && adv.DatabaseSpecific.ABOM != nil && adv.DatabaseSpecific.ABOM.Indicators != nil {
+			ind := adv.DatabaseSpecific.ABOM.Indicators
+			for _, img := range ind.DockerImages {
 				if strings.HasPrefix(ref.Path, img) || strings.HasPrefix(ref.Path, strings.Split(img, ":")[0]) {
 					return adv, "compromised"
 				}
 			}
 		}
 
-		// Check detected tools — actions that wrap a compromised tool
 		if len(ref.DetectedTools) > 0 {
-			for _, aa := range adv.AffectedActions {
-				toolNames := aa.ToolNames
-				// Infer tool name from uses if tool_names not set
+			for _, aff := range adv.Affected {
+				if aff.Package.Ecosystem != ecosystemGitHubActions {
+					continue
+				}
+				var toolNames []string
+				if aff.EcosystemSpecific.ABOM != nil {
+					toolNames = aff.EcosystemSpecific.ABOM.ToolNames
+				}
 				if len(toolNames) == 0 {
-					toolNames = inferToolNames(aa.Uses)
+					toolNames = inferToolNames(aff.Package.Name)
 				}
 				for _, tool := range toolNames {
 					for _, detected := range ref.DetectedTools {
@@ -187,11 +245,13 @@ func (d *Database) checkAction(ref *model.ActionRef) {
 	}
 }
 
-// matchAction checks if an ActionRef matches an AffectedAction entry.
-// Returns "compromised", "verify-sha", or "" (no match).
-func matchAction(ref *model.ActionRef, aa *AffectedAction) string {
-	// Parse uses into owner/repo
-	parts := strings.SplitN(aa.Uses, "/", 2)
+// matchAffected checks if an ActionRef matches an Affected entry.
+func matchAffected(ref *model.ActionRef, aff *Affected) string {
+	if aff.Package.Ecosystem != ecosystemGitHubActions {
+		return ""
+	}
+
+	parts := strings.SplitN(aff.Package.Name, "/", 2)
 	if len(parts) != 2 {
 		return ""
 	}
@@ -201,37 +261,23 @@ func matchAction(ref *model.ActionRef, aa *AffectedAction) string {
 		return ""
 	}
 
-	// Check safe_tags first
-	for _, safe := range aa.AffectedRefs.SafeTags {
-		if ref.Ref == safe {
-			return ""
-		}
-	}
-
-	// Check safe_shas
-	for _, safe := range aa.AffectedRefs.SafeSHAs {
-		if strings.EqualFold(ref.Ref, safe) {
-			return ""
-		}
-	}
-
-	// If ref is a SHA and not in safe_shas, flag as "verify manually"
+	// SHA-pinned refs can't be ordinally compared against tag ranges.
+	// Flag as "verify manually" so users know to check against the
+	// affected_period or upstream history.
 	if ref.RefType == model.RefTypeSHA {
 		return "verify-sha"
 	}
 
-	// Check explicit tag list
-	if len(aa.AffectedRefs.Tags) > 0 {
-		for _, tag := range aa.AffectedRefs.Tags {
-			if ref.Ref == tag {
-				return "compromised"
-			}
+	// Explicit version list (if present) is a direct equality check.
+	for _, v := range aff.Versions {
+		if ref.Ref == v {
+			return "compromised"
 		}
 	}
 
-	// Check tag range
-	if aa.AffectedRefs.TagRange != "" {
-		if matchesTagRange(ref.Ref, aa.AffectedRefs.TagRange) {
+	// Walk ranges. Any match means the ref is affected.
+	for i := range aff.Ranges {
+		if matchesRange(ref.Ref, &aff.Ranges[i]) {
 			return "compromised"
 		}
 	}
@@ -239,18 +285,94 @@ func matchAction(ref *model.ActionRef, aa *AffectedAction) string {
 	return ""
 }
 
-// inferToolNames extracts likely tool names from an action uses field.
+// matchesRange walks events in declaration order and toggles affected state.
+// Each introduced starts an affected window; each fixed or last_affected
+// closes it. Returns true if version lands inside any affected window.
+func matchesRange(version string, rng *Range) bool {
+	if rng.Type != "ECOSYSTEM" && rng.Type != "SEMVER" {
+		return false
+	}
+
+	affected := false
+	for _, ev := range rng.Events {
+		switch {
+		case ev.Introduced != "":
+			// "0" is the OSV sentinel meaning "from the beginning of time."
+			if ev.Introduced == "0" {
+				affected = true
+			} else if compareVersions(version, ev.Introduced) >= 0 {
+				affected = true
+			}
+		case ev.Fixed != "":
+			if compareVersions(version, ev.Fixed) >= 0 {
+				affected = false
+			}
+		case ev.LastAffected != "":
+			if compareVersions(version, ev.LastAffected) > 0 {
+				affected = false
+			}
+		}
+	}
+	return affected
+}
+
+// compareVersions compares two tag-like version strings. Returns -1, 0, or 1.
+// Only works for semver-shaped strings (optionally v-prefixed). Non-numeric
+// strings (e.g. "main") compare as less than any valid version.
+func compareVersions(a, b string) int {
+	an := normalizeVersion(a)
+	bn := normalizeVersion(b)
+	switch {
+	case an == "" && bn == "":
+		return 0
+	case an == "":
+		return -1
+	case bn == "":
+		return 1
+	case an < bn:
+		return -1
+	case an > bn:
+		return 1
+	}
+	return 0
+}
+
+// normalizeVersion strips the leading 'v' and zero-pads each component for
+// lexicographic comparison. Returns "" for non-numeric strings.
+func normalizeVersion(v string) string {
+	v = strings.TrimPrefix(v, "v")
+	if v == "" {
+		return ""
+	}
+	parts := strings.Split(v, ".")
+	var normalized []string
+	for _, p := range parts {
+		for _, c := range p {
+			if c < '0' || c > '9' {
+				return ""
+			}
+		}
+		for len(p) < 5 {
+			p = "0" + p
+		}
+		normalized = append(normalized, p)
+	}
+	for len(normalized) < 3 {
+		normalized = append(normalized, "00000")
+	}
+	return strings.Join(normalized, ".")
+}
+
+// inferToolNames extracts likely tool names from an action package name.
 // e.g., "aquasecurity/trivy-action" -> ["trivy"]
 // e.g., "aquasecurity/setup-trivy" -> ["trivy"]
-func inferToolNames(uses string) []string {
-	parts := strings.SplitN(uses, "/", 2)
+func inferToolNames(pkgName string) []string {
+	parts := strings.SplitN(pkgName, "/", 2)
 	if len(parts) != 2 {
 		return nil
 	}
 	repo := strings.ToLower(parts[1])
 
-	// Common patterns: {tool}-action, setup-{tool}, ghaction-{tool}-scan, etc.
-	// Extract candidate tool names by removing common suffixes/prefixes
 	candidates := []string{repo}
 	for _, prefix := range []string{"setup-", "ghaction-", "action-"} {
 		if strings.HasPrefix(repo, prefix) {
@@ -263,18 +385,10 @@ func inferToolNames(uses string) []string {
 		}
 	}
 
-	// Known tool name mappings
-	knownTools := map[string]string{
-		"trivy":  "trivy",
-		"grype":  "grype",
-		"snyk":   "snyk",
-		"cosign": "cosign",
-		"syft":   "syft",
-	}
+	knownTools := []string{"trivy", "grype", "snyk", "cosign", "syft"}
 
 	var tools []string
 	for _, candidate := range candidates {
-		// Check if any known tool name appears in the candidate
 		for _, toolName := range knownTools {
 			if strings.Contains(candidate, toolName) {
 				found := false
@@ -292,74 +406,6 @@ func inferToolNames(uses string) []string {
 	}
 
 	return tools
-}
-
-// matchesTagRange parses a range like ">=v0.0.1 <=v0.34.2" and checks if
-// the given version falls within it.
-func matchesTagRange(version, rangeStr string) bool {
-	// Parse range components (e.g., ">=v0.0.1 <=v0.34.2")
-	parts := strings.Fields(rangeStr)
-	v := normalizeVersion(version)
-	if v == "" {
-		return false
-	}
-
-	for _, part := range parts {
-		if strings.HasPrefix(part, ">=") {
-			min := normalizeVersion(strings.TrimPrefix(part, ">="))
-			if v < min {
-				return false
-			}
-		} else if strings.HasPrefix(part, "<=") {
-			max := normalizeVersion(strings.TrimPrefix(part, "<="))
-			if v > max {
-				return false
-			}
-		} else if strings.HasPrefix(part, ">") {
-			min := normalizeVersion(strings.TrimPrefix(part, ">"))
-			if v <= min {
-				return false
-			}
-		} else if strings.HasPrefix(part, "<") {
-			max := normalizeVersion(strings.TrimPrefix(part, "<"))
-			if v >= max {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-// normalizeVersion strips the leading 'v' and zero-pads each component
-// for lexicographic comparison.
-func normalizeVersion(v string) string {
-	v = strings.TrimPrefix(v, "v")
-	if v == "" {
-		return ""
-	}
-	parts := strings.Split(v, ".")
-	var normalized []string
-	for _, p := range parts {
-		// Check if it's numeric
-		isNumeric := true
-		for _, c := range p {
-			if c < '0' || c > '9' {
-				isNumeric = false
-				break
-			}
-		}
-		if !isNumeric {
-			return "" // not a version string
-		}
-		for len(p) < 5 {
-			p = "0" + p
-		}
-		normalized = append(normalized, p)
-	}
-	for len(normalized) < 3 {
-		normalized = append(normalized, "00000")
-	}
-	return strings.Join(normalized, ".")
 }
 
 // --- Loading functions ---
@@ -393,7 +439,7 @@ func loadRemote(opts LoadOptions) (*AdvisoryDB, error) {
 		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1 MB limit
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return nil, err
 	}
