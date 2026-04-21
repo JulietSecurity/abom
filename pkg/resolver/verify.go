@@ -1,10 +1,11 @@
 package resolver
 
 import (
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
+	"os"
+	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/julietsecurity/abom/pkg/model"
@@ -167,69 +168,71 @@ type TagResolver interface {
 	ResolveTag(owner, repo, sha string) (tag string, err error)
 }
 
-// GitHubTagResolver resolves a SHA to its tag via the GitHub API.
+// GitHubTagResolver resolves a SHA to its tag via git ls-remote.
 type GitHubTagResolver struct {
-	client *http.Client
-	token  string
+	token string
 }
 
 func NewGitHubTagResolver(token string) *GitHubTagResolver {
-	return &GitHubTagResolver{
-		client: &http.Client{Timeout: 30 * time.Second},
-		token:  token,
-	}
+	return &GitHubTagResolver{token: token}
 }
 
 func (r *GitHubTagResolver) ResolveTag(owner, repo, sha string) (string, error) {
-	// List tags and find ones whose commit SHA matches. The tags endpoint
-	// returns lightweight and annotated tags with their target commit.
-	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/tags?per_page=100", owner, repo)
+	// Use git ls-remote to list tags. This uses the git protocol, not the
+	// REST API, so it doesn't consume API rate limit quota — critical for
+	// CI environments where the GITHUB_TOKEN budget is shared across
+	// workflows.
+	repoURL := fmt.Sprintf("https://github.com/%s/%s.git", owner, repo)
 
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Accept", "application/vnd.github.v3+json")
+	cmd := exec.Command("git", "ls-remote", "--tags", repoURL)
+	// Pass token via GIT_ASKPASS to avoid embedding it in the URL.
 	if r.token != "" {
-		req.Header.Set("Authorization", "token "+r.token)
+		cmd.Env = append(os.Environ(),
+			fmt.Sprintf("GIT_ASKPASS_TOKEN=%s", r.token),
+			"GIT_TERMINAL_PROMPT=0",
+		)
+		// git ls-remote to public repos works without auth, but if a
+		// token is available it helps with private repos and rate limits.
+		cmd.Args = append(cmd.Args[:0],
+			"git",
+			"-c", fmt.Sprintf("http.extraHeader=Authorization: token %s", r.token),
+			"ls-remote", "--tags", repoURL,
+		)
 	}
 
-	resp, err := r.client.Do(req)
+	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("HTTP request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	switch resp.StatusCode {
-	case http.StatusOK:
-		// continue
-	case http.StatusForbidden, http.StatusTooManyRequests:
-		return "", ErrVerifyRateLimit
-	default:
-		return "", fmt.Errorf("unexpected status %d", resp.StatusCode)
+		return "", fmt.Errorf("git ls-remote failed: %w", err)
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return "", fmt.Errorf("reading response: %w", err)
-	}
-
-	var tags []struct {
-		Name   string `json:"name"`
-		Commit struct {
-			SHA string `json:"sha"`
-		} `json:"commit"`
-	}
-	if err := json.Unmarshal(body, &tags); err != nil {
-		return "", fmt.Errorf("parsing tags response: %w", err)
-	}
-
-	for _, tag := range tags {
-		if tag.Commit.SHA == sha {
-			return tag.Name, nil
+	// Parse output: each line is "<sha>\trefs/tags/<name>"
+	// Annotated tags also have "<sha>\trefs/tags/<name>^{}" lines where
+	// the SHA is the dereferenced commit. Prefer ^{} entries.
+	tagsBySHA := make(map[string]string)
+	for _, line := range strings.Split(string(out), "\n") {
+		parts := strings.Fields(line)
+		if len(parts) != 2 {
+			continue
+		}
+		tagSHA := parts[0]
+		ref := parts[1]
+		if !strings.HasPrefix(ref, "refs/tags/") {
+			continue
+		}
+		name := strings.TrimPrefix(ref, "refs/tags/")
+		if strings.HasSuffix(name, "^{}") {
+			// Dereferenced annotated tag — the SHA is the commit SHA.
+			name = strings.TrimSuffix(name, "^{}")
+			tagsBySHA[tagSHA] = name
+		} else if _, exists := tagsBySHA[tagSHA]; !exists {
+			// Lightweight tag or annotated tag object SHA.
+			tagsBySHA[tagSHA] = name
 		}
 	}
 
+	if tag, ok := tagsBySHA[sha]; ok {
+		return tag, nil
+	}
 	return "", nil
 }
 
