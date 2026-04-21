@@ -191,6 +191,13 @@ func (d *Database) Check(ref *model.ActionRef) (*Advisory, string) {
 		}
 
 		if len(ref.DetectedTools) > 0 {
+			// If this ref is one of the advisory's affected packages and
+			// has a ResolvedTag that was already checked against version
+			// ranges (and found to be outside the affected range), don't
+			// re-flag it via the detected-tool pathway.
+			if ref.ResolvedTag != "" && refIsKnownSafeForAdvisory(ref, adv) {
+				continue
+			}
 			for _, aff := range adv.Affected {
 				if aff.Package.Ecosystem != ecosystemGitHubActions {
 					continue
@@ -234,11 +241,24 @@ func (d *Database) CheckAll(abom *model.ABOM) {
 // blanket-flagging. Actions whose resolved tag falls outside the affected
 // range have their Compromised flag cleared.
 func (d *Database) RecheckSHARefs(abom *model.ABOM) {
+	// Build a lookup of resolved tags from the deduplicated actions list.
+	// CollectActions deduplicates by Raw, so multiple workflow refs for the
+	// same action share only one entry in abom.Actions. ResolveABOMTags
+	// sets ResolvedTag on those entries, but duplicate workflow-level refs
+	// miss out. Propagate resolved tags before rechecking.
+	resolvedTags := make(map[string]string) // Raw -> ResolvedTag
+	for _, ref := range abom.Actions {
+		if ref.ResolvedTag != "" {
+			resolvedTags[ref.Raw] = ref.ResolvedTag
+		}
+	}
+
 	changed := false
 	for _, wf := range abom.Workflows {
 		for _, job := range wf.Jobs {
 			for _, step := range job.Steps {
 				if step.Action != nil {
+					propagateResolvedTags(step.Action, resolvedTags)
 					if d.recheckAction(step.Action) {
 						changed = true
 					}
@@ -261,6 +281,19 @@ func (d *Database) RecheckSHARefs(abom *model.ABOM) {
 			}
 		}
 		abom.Summary.Compromised = count
+	}
+}
+
+// propagateResolvedTags copies ResolvedTag from the lookup to refs (and their
+// dependencies) that are missing it.
+func propagateResolvedTags(ref *model.ActionRef, tags map[string]string) {
+	if ref.ResolvedTag == "" {
+		if tag, ok := tags[ref.Raw]; ok {
+			ref.ResolvedTag = tag
+		}
+	}
+	for _, dep := range ref.Dependencies {
+		propagateResolvedTags(dep, tags)
 	}
 }
 
@@ -302,6 +335,43 @@ func (d *Database) checkAction(ref *model.ActionRef) {
 	for _, dep := range ref.Dependencies {
 		d.checkAction(dep)
 	}
+}
+
+// refIsKnownSafeForAdvisory returns true if the ref's owner/repo matches any
+// affected entry in the advisory AND its ResolvedTag falls outside that
+// entry's affected version ranges. This prevents the detected-tool pathway
+// from re-flagging an action whose version was already verified as safe.
+func refIsKnownSafeForAdvisory(ref *model.ActionRef, adv *Advisory) bool {
+	for _, aff := range adv.Affected {
+		if aff.Package.Ecosystem != ecosystemGitHubActions {
+			continue
+		}
+		parts := strings.SplitN(aff.Package.Name, "/", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		if !strings.EqualFold(ref.Owner, parts[0]) || !strings.EqualFold(ref.Repo, parts[1]) {
+			continue
+		}
+		// This ref IS the affected package. Check if its resolved tag
+		// is in the affected range.
+		for _, v := range aff.Versions {
+			if ref.ResolvedTag == v {
+				return false // still affected
+			}
+		}
+		inRange := false
+		for i := range aff.Ranges {
+			if matchesRange(ref.ResolvedTag, &aff.Ranges[i]) {
+				inRange = true
+				break
+			}
+		}
+		if !inRange {
+			return true // resolved tag is outside affected ranges
+		}
+	}
+	return false
 }
 
 // matchAffected checks if an ActionRef matches an Affected entry.

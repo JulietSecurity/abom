@@ -219,6 +219,34 @@ func TestCheck_TrivyActionVulnerable(t *testing.T) {
 			wantResult: "compromised",
 		},
 		{
+			name: "setup-trivy SHA fixed with detected tools — not compromised",
+			ref: &model.ActionRef{
+				Owner:         "aquasecurity",
+				Repo:          "setup-trivy",
+				Ref:           "3fb12ec12f41e471780db15c232d5dd185dcb514",
+				RefType:       model.RefTypeSHA,
+				ActionType:    model.ActionTypeStandard,
+				Pinned:        true,
+				ResolvedTag:   "v0.2.6",
+				DetectedTools: []string{"trivy"},
+			},
+			wantHit: false,
+		},
+		{
+			name: "third-party wrapper with detected trivy tool — still flagged",
+			ref: &model.ActionRef{
+				Owner:         "crazy-max",
+				Repo:          "ghaction-container-scan",
+				Ref:           "abcdef1234567890abcdef1234567890abcdef12",
+				RefType:       model.RefTypeSHA,
+				ActionType:    model.ActionTypeStandard,
+				Pinned:        true,
+				DetectedTools: []string{"trivy"},
+			},
+			wantHit:    true,
+			wantResult: "detected-tool",
+		},
+		{
 			name: "local action not matched",
 			ref: &model.ActionRef{
 				ActionType: model.ActionTypeLocal,
