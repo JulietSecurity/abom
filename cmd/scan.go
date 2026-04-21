@@ -164,32 +164,30 @@ func runScan(cmd *cobra.Command, args []string) error {
 		resolver.ResolveABOMRefs(abom, resolver.NewGitHubRefResolver(githubToken), col)
 	}
 
+	// Resolve tags for advisory-flagged SHA refs before SHA verification,
+	// which makes many API calls and can trigger secondary rate limits.
+	// Tag resolution only needs 0-2 calls (one per flagged ref), so it
+	// should run first while API budget is available.
+	if checkAdvisory && !offline && !noNetwork {
+		if !quiet {
+			fmt.Fprintln(os.Stderr, "Resolving advisory-flagged SHAs to upstream tags...")
+		}
+		resolver.ResolveABOMTags(abom, resolver.NewGitHubTagResolver(githubToken), col)
+
+		db := advisory.NewDatabase(advisory.LoadOptions{
+			Offline: offline,
+			NoCache: true, // already cached from first load
+			Quiet:   true,
+			Token:   githubToken,
+		})
+		db.RecheckSHARefs(abom)
+	}
+
 	if verifyShas {
 		if !quiet {
 			fmt.Fprintln(os.Stderr, "Verifying pinned SHAs against upstream refs...")
 		}
 		resolver.VerifyABOMShas(abom, resolver.NewGitHubSHAVerifier(githubToken), col)
-
-		// Resolve SHA-pinned refs to their upstream tags so advisory
-		// checking can compare them against affected version ranges
-		// instead of blanket-flagging all SHA refs as "verify manually".
-		if !quiet {
-			fmt.Fprintln(os.Stderr, "Resolving pinned SHAs to upstream tags...")
-		}
-		resolver.ResolveABOMTags(abom, resolver.NewGitHubTagResolver(githubToken), col)
-
-		// Re-check advisories now that SHA refs have resolved tags.
-		// This clears false positives for SHA-pinned refs that resolve
-		// to fixed versions.
-		if checkAdvisory {
-			db := advisory.NewDatabase(advisory.LoadOptions{
-				Offline: offline,
-				NoCache: true, // already cached from first load
-				Quiet:   true,
-				Token:   githubToken,
-			})
-			db.RecheckSHARefs(abom)
-		}
 	}
 
 	// Write output
