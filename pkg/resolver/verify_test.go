@@ -268,3 +268,61 @@ func TestVerify_NilCollector_NoPanic(t *testing.T) {
 	// Should not panic.
 	VerifyABOMShas(abom, mv, nil)
 }
+
+// mockTagResolver records calls and returns canned tags per owner/repo/sha.
+type mockTagResolver struct {
+	tags  map[string]string // "owner/repo@sha" -> tag
+	calls map[string]int
+}
+
+func newMockTagResolver() *mockTagResolver {
+	return &mockTagResolver{
+		tags:  make(map[string]string),
+		calls: make(map[string]int),
+	}
+}
+
+func (m *mockTagResolver) ResolveTag(owner, repo, sha string) (string, error) {
+	key := fmt.Sprintf("%s/%s@%s", owner, repo, sha)
+	m.calls[key]++
+	if tag, ok := m.tags[key]; ok {
+		return tag, nil
+	}
+	return "", nil
+}
+
+func TestResolveABOMTags_SkipsNonCompromised(t *testing.T) {
+	mr := newMockTagResolver()
+	mr.tags[fmt.Sprintf("aquasecurity/setup-trivy@%s", fullSHA1)] = "v0.2.6"
+
+	compromised := newSHAAction("aquasecurity", "setup-trivy", "", fullSHA1)
+	compromised.Compromised = true
+	compromised.Advisory = "ABOM-2026-001 (SHA — verify manually)"
+
+	clean := newSHAAction("actions", "checkout", "", fullSHA2)
+	// clean.Compromised is false (default)
+
+	abom := &model.ABOM{Actions: []*model.ActionRef{compromised, clean}}
+	col := &warnings.Collector{}
+	ResolveABOMTags(abom, mr, col)
+
+	// Should only resolve the compromised action.
+	compromisedKey := fmt.Sprintf("aquasecurity/setup-trivy@%s", fullSHA1)
+	cleanKey := fmt.Sprintf("actions/checkout@%s", fullSHA2)
+
+	if mr.calls[compromisedKey] != 1 {
+		t.Errorf("expected 1 call for compromised ref, got %d", mr.calls[compromisedKey])
+	}
+	if mr.calls[cleanKey] != 0 {
+		t.Errorf("expected 0 calls for clean ref, got %d", mr.calls[cleanKey])
+	}
+	if compromised.ResolvedTag != "v0.2.6" {
+		t.Errorf("ResolvedTag = %q, want %q", compromised.ResolvedTag, "v0.2.6")
+	}
+	if clean.ResolvedTag != "" {
+		t.Errorf("clean ref should have no ResolvedTag, got %q", clean.ResolvedTag)
+	}
+	if col.Count() != 0 {
+		t.Errorf("expected 0 warnings, got %d", col.Count())
+	}
+}

@@ -253,6 +253,9 @@ func ResolveABOMTags(abom *model.ABOM, r TagResolver, col *warnings.Collector) {
 		if ref.RefType != model.RefTypeSHA {
 			continue
 		}
+		if !ref.Compromised {
+			continue
+		}
 		switch ref.ActionType {
 		case model.ActionTypeDocker, model.ActionTypeLocal:
 			continue
