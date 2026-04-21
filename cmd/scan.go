@@ -169,6 +169,27 @@ func runScan(cmd *cobra.Command, args []string) error {
 			fmt.Fprintln(os.Stderr, "Verifying pinned SHAs against upstream refs...")
 		}
 		resolver.VerifyABOMShas(abom, resolver.NewGitHubSHAVerifier(githubToken), col)
+
+		// Resolve SHA-pinned refs to their upstream tags so advisory
+		// checking can compare them against affected version ranges
+		// instead of blanket-flagging all SHA refs as "verify manually".
+		if !quiet {
+			fmt.Fprintln(os.Stderr, "Resolving pinned SHAs to upstream tags...")
+		}
+		resolver.ResolveABOMTags(abom, resolver.NewGitHubTagResolver(githubToken), col)
+
+		// Re-check advisories now that SHA refs have resolved tags.
+		// This clears false positives for SHA-pinned refs that resolve
+		// to fixed versions.
+		if checkAdvisory {
+			db := advisory.NewDatabase(advisory.LoadOptions{
+				Offline: offline,
+				NoCache: true, // already cached from first load
+				Quiet:   true,
+				Token:   githubToken,
+			})
+			db.RecheckSHARefs(abom)
+		}
 	}
 
 	// Write output

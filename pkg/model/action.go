@@ -36,6 +36,7 @@ type ActionRef struct {
 	RefType      RefType     `json:"ref_type,omitempty"`
 	ActionType   ActionType  `json:"type"`
 	Pinned       bool        `json:"pinned"`
+	ResolvedTag  string      `json:"resolved_tag,omitempty"`
 	ResolvedSHA  string      `json:"resolved_sha,omitempty"`
 	Dependencies []*ActionRef `json:"dependencies,omitempty"`
 	Compromised  bool        `json:"compromised,omitempty"`

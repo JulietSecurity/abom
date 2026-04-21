@@ -152,6 +152,73 @@ func TestCheck_TrivyActionVulnerable(t *testing.T) {
 			wantResult: "verify-sha",
 		},
 		{
+			name: "trivy-action SHA with resolved tag in fixed range — not compromised",
+			ref: &model.ActionRef{
+				Owner:       "aquasecurity",
+				Repo:        "trivy-action",
+				Ref:         "abcdef1234567890abcdef1234567890abcdef12",
+				RefType:     model.RefTypeSHA,
+				ActionType:  model.ActionTypeStandard,
+				Pinned:      true,
+				ResolvedTag: "v0.35.0",
+			},
+			wantHit: false,
+		},
+		{
+			name: "trivy-action SHA with resolved tag above fixed — not compromised",
+			ref: &model.ActionRef{
+				Owner:       "aquasecurity",
+				Repo:        "trivy-action",
+				Ref:         "abcdef1234567890abcdef1234567890abcdef12",
+				RefType:     model.RefTypeSHA,
+				ActionType:  model.ActionTypeStandard,
+				Pinned:      true,
+				ResolvedTag: "v1.0.0",
+			},
+			wantHit: false,
+		},
+		{
+			name: "trivy-action SHA with resolved tag in vulnerable range — compromised",
+			ref: &model.ActionRef{
+				Owner:       "aquasecurity",
+				Repo:        "trivy-action",
+				Ref:         "abcdef1234567890abcdef1234567890abcdef12",
+				RefType:     model.RefTypeSHA,
+				ActionType:  model.ActionTypeStandard,
+				Pinned:      true,
+				ResolvedTag: "v0.20.0",
+			},
+			wantHit:    true,
+			wantResult: "compromised",
+		},
+		{
+			name: "setup-trivy SHA with resolved tag at fixed version — not compromised",
+			ref: &model.ActionRef{
+				Owner:       "aquasecurity",
+				Repo:        "setup-trivy",
+				Ref:         "3fb12ec12f41e471780db15c232d5dd185dcb514",
+				RefType:     model.RefTypeSHA,
+				ActionType:  model.ActionTypeStandard,
+				Pinned:      true,
+				ResolvedTag: "v0.2.6",
+			},
+			wantHit: false,
+		},
+		{
+			name: "setup-trivy SHA with resolved tag in vulnerable range — compromised",
+			ref: &model.ActionRef{
+				Owner:       "aquasecurity",
+				Repo:        "setup-trivy",
+				Ref:         "3fb12ec12f41e471780db15c232d5dd185dcb514",
+				RefType:     model.RefTypeSHA,
+				ActionType:  model.ActionTypeStandard,
+				Pinned:      true,
+				ResolvedTag: "v0.2.3",
+			},
+			wantHit:    true,
+			wantResult: "compromised",
+		},
+		{
 			name: "local action not matched",
 			ref: &model.ActionRef{
 				ActionType: model.ActionTypeLocal,
@@ -341,6 +408,117 @@ func TestMatchesRange_LastAffected(t *testing.T) {
 				t.Errorf("got %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestRecheckSHARefs_ClearsFalsePositive(t *testing.T) {
+	db := testDB()
+
+	// Simulate the real scenario: SHA-pinned setup-trivy at the fixed version.
+	action := &model.ActionRef{
+		Raw:        "aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514",
+		Owner:      "aquasecurity",
+		Repo:       "setup-trivy",
+		Ref:        "3fb12ec12f41e471780db15c232d5dd185dcb514",
+		RefType:    model.RefTypeSHA,
+		ActionType: model.ActionTypeStandard,
+		Pinned:     true,
+	}
+
+	abom := &model.ABOM{
+		Workflows: []*model.Workflow{
+			{
+				Path: ".github/workflows/ci.yml",
+				Jobs: []*model.Job{
+					{
+						ID: "scan",
+						Steps: []*model.Step{
+							{Name: "setup-trivy", Action: action},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// First pass: CheckAll flags it as "verify-sha" (false positive).
+	db.CheckAll(abom)
+	if !action.Compromised {
+		t.Fatal("expected initial CheckAll to flag SHA ref as compromised")
+	}
+	if action.Advisory != "ABOM-2026-001 (SHA — verify manually)" {
+		t.Fatalf("advisory = %q, want verify-sha annotation", action.Advisory)
+	}
+
+	// Simulate --verify-shas resolving the SHA to the fixed tag.
+	abom.CollectActions()
+	for _, ref := range abom.Actions {
+		if ref.Owner == "aquasecurity" && ref.Repo == "setup-trivy" {
+			ref.ResolvedTag = "v0.2.6"
+		}
+	}
+	// Also set on the workflow-level ref (RecheckSHARefs walks workflows).
+	action.ResolvedTag = "v0.2.6"
+
+	// Second pass: RecheckSHARefs should clear the false positive.
+	db.RecheckSHARefs(abom)
+	if action.Compromised {
+		t.Error("expected RecheckSHARefs to clear compromised flag for fixed version")
+	}
+	if action.Advisory != "" {
+		t.Errorf("advisory = %q, want empty", action.Advisory)
+	}
+	if abom.Summary.Compromised != 0 {
+		t.Errorf("Summary.Compromised = %d, want 0", abom.Summary.Compromised)
+	}
+}
+
+func TestRecheckSHARefs_KeepsVulnerable(t *testing.T) {
+	db := testDB()
+
+	action := &model.ActionRef{
+		Raw:        "aquasecurity/setup-trivy@deadbeef1234567890deadbeef1234567890dead",
+		Owner:      "aquasecurity",
+		Repo:       "setup-trivy",
+		Ref:        "deadbeef1234567890deadbeef1234567890dead",
+		RefType:    model.RefTypeSHA,
+		ActionType: model.ActionTypeStandard,
+		Pinned:     true,
+	}
+
+	abom := &model.ABOM{
+		Workflows: []*model.Workflow{
+			{
+				Path: ".github/workflows/ci.yml",
+				Jobs: []*model.Job{
+					{
+						ID: "scan",
+						Steps: []*model.Step{
+							{Name: "setup-trivy", Action: action},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	db.CheckAll(abom)
+	abom.CollectActions()
+
+	// Resolve to a vulnerable tag.
+	action.ResolvedTag = "v0.2.3"
+	for _, ref := range abom.Actions {
+		if ref.Owner == "aquasecurity" && ref.Repo == "setup-trivy" {
+			ref.ResolvedTag = "v0.2.3"
+		}
+	}
+
+	db.RecheckSHARefs(abom)
+	if !action.Compromised {
+		t.Error("expected action to remain compromised for vulnerable resolved tag")
+	}
+	if action.Advisory != "ABOM-2026-001" {
+		t.Errorf("advisory = %q, want ABOM-2026-001", action.Advisory)
 	}
 }
 

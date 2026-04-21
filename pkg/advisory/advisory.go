@@ -228,6 +228,65 @@ func (d *Database) CheckAll(abom *model.ABOM) {
 	}
 }
 
+// RecheckSHARefs re-evaluates SHA-pinned actions that were previously marked
+// as compromised with "verify-sha". If the ref now has a ResolvedTag (from
+// tag resolution), the advisory check can use version comparison instead of
+// blanket-flagging. Actions whose resolved tag falls outside the affected
+// range have their Compromised flag cleared.
+func (d *Database) RecheckSHARefs(abom *model.ABOM) {
+	changed := false
+	for _, wf := range abom.Workflows {
+		for _, job := range wf.Jobs {
+			for _, step := range job.Steps {
+				if step.Action != nil {
+					if d.recheckAction(step.Action) {
+						changed = true
+					}
+				}
+			}
+		}
+	}
+	// Also recheck collected actions in case they weren't reached via
+	// the workflow walk (e.g. transitive dependencies added later).
+	for _, ref := range abom.Actions {
+		if d.recheckAction(ref) {
+			changed = true
+		}
+	}
+	if changed {
+		count := 0
+		for _, ref := range abom.Actions {
+			if ref.Compromised {
+				count++
+			}
+		}
+		abom.Summary.Compromised = count
+	}
+}
+
+func (d *Database) recheckAction(ref *model.ActionRef) bool {
+	changed := false
+	if ref.Compromised && ref.RefType == model.RefTypeSHA && ref.ResolvedTag != "" {
+		adv, result := d.Check(ref)
+		if adv == nil {
+			// Resolved tag is outside affected ranges — clear the flag.
+			ref.Compromised = false
+			ref.Advisory = ""
+			changed = true
+		} else if result != "verify-sha" {
+			// Still compromised but now with a definitive result.
+			ref.Advisory = adv.ID
+			changed = true
+		}
+	}
+	for _, dep := range ref.Dependencies {
+		if d.recheckAction(dep) {
+			changed = true
+		}
+	}
+	return changed
+}
+
 func (d *Database) checkAction(ref *model.ActionRef) {
 	if adv, result := d.Check(ref); adv != nil {
 		ref.Compromised = true
@@ -262,9 +321,27 @@ func matchAffected(ref *model.ActionRef, aff *Affected) string {
 	}
 
 	// SHA-pinned refs can't be ordinally compared against tag ranges.
-	// Flag as "verify manually" so users know to check against the
-	// affected_period or upstream history.
+	// However, if the SHA has been resolved to an upstream tag (via
+	// --verify-shas), we can compare that tag against the affected ranges.
+	// Only flag as "verify manually" when we don't know the corresponding
+	// version.
 	if ref.RefType == model.RefTypeSHA {
+		if ref.ResolvedTag != "" {
+			// Check the resolved tag against explicit version lists.
+			for _, v := range aff.Versions {
+				if ref.ResolvedTag == v {
+					return "compromised"
+				}
+			}
+			// Check the resolved tag against ranges.
+			for i := range aff.Ranges {
+				if matchesRange(ref.ResolvedTag, &aff.Ranges[i]) {
+					return "compromised"
+				}
+			}
+			// Resolved tag is outside affected ranges — not compromised.
+			return ""
+		}
 		return "verify-sha"
 	}
 

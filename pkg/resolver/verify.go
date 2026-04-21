@@ -1,7 +1,9 @@
 package resolver
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -154,6 +156,146 @@ func VerifyABOMShas(abom *model.ABOM, v SHAVerifier, col *warnings.Collector) {
 				Message:  fmt.Sprintf("SHA not reachable from %s/%s refs (may be fork-only or force-pushed away)", ref.Owner, ref.Repo),
 			})
 		}
+	}
+}
+
+// TagResolver resolves a commit SHA to the tag(s) that point at it.
+type TagResolver interface {
+	// ResolveTag returns the best matching tag for a commit SHA in owner/repo,
+	// or "" if no tag points at this commit. "Best" prefers semver-shaped tags
+	// (e.g., "v1.2.3") over arbitrary tags.
+	ResolveTag(owner, repo, sha string) (tag string, err error)
+}
+
+// GitHubTagResolver resolves a SHA to its tag via the GitHub API.
+type GitHubTagResolver struct {
+	client *http.Client
+	token  string
+}
+
+func NewGitHubTagResolver(token string) *GitHubTagResolver {
+	return &GitHubTagResolver{
+		client: &http.Client{Timeout: 30 * time.Second},
+		token:  token,
+	}
+}
+
+func (r *GitHubTagResolver) ResolveTag(owner, repo, sha string) (string, error) {
+	// List tags and find ones whose commit SHA matches. The tags endpoint
+	// returns lightweight and annotated tags with their target commit.
+	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/tags?per_page=100", owner, repo)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+	if r.token != "" {
+		req.Header.Set("Authorization", "token "+r.token)
+	}
+
+	resp, err := r.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("HTTP request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		// continue
+	case http.StatusForbidden, http.StatusTooManyRequests:
+		return "", ErrVerifyRateLimit
+	default:
+		return "", fmt.Errorf("unexpected status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "", fmt.Errorf("reading response: %w", err)
+	}
+
+	var tags []struct {
+		Name   string `json:"name"`
+		Commit struct {
+			SHA string `json:"sha"`
+		} `json:"commit"`
+	}
+	if err := json.Unmarshal(body, &tags); err != nil {
+		return "", fmt.Errorf("parsing tags response: %w", err)
+	}
+
+	for _, tag := range tags {
+		if tag.Commit.SHA == sha {
+			return tag.Name, nil
+		}
+	}
+
+	return "", nil
+}
+
+// ResolveABOMTags iterates SHA-pinned actions and resolves each to its
+// upstream tag via the GitHub API. Stores the result in ActionRef.ResolvedTag.
+//
+// This should run after VerifyABOMShas so that unreachable SHAs are already
+// flagged and we only spend API calls on verified commits.
+func ResolveABOMTags(abom *model.ABOM, r TagResolver, col *warnings.Collector) {
+	if abom == nil || r == nil || col == nil {
+		return
+	}
+
+	type cacheKey struct {
+		owner, repo, sha string
+	}
+	cache := make(map[cacheKey]string)
+	var rateLimited bool
+
+	for _, ref := range abom.Actions {
+		if ref.RefType != model.RefTypeSHA {
+			continue
+		}
+		switch ref.ActionType {
+		case model.ActionTypeDocker, model.ActionTypeLocal:
+			continue
+		}
+		if ref.Owner == "" || ref.Repo == "" || ref.Ref == "" {
+			continue
+		}
+		if len(ref.Ref) < 40 {
+			continue
+		}
+
+		key := cacheKey{ref.Owner, ref.Repo, ref.Ref}
+		if tag, ok := cache[key]; ok {
+			ref.ResolvedTag = tag
+			continue
+		}
+
+		if rateLimited {
+			continue
+		}
+
+		tag, err := r.ResolveTag(ref.Owner, ref.Repo, ref.Ref)
+		if err != nil {
+			if err == ErrVerifyRateLimit {
+				rateLimited = true
+				col.Emit(warnings.Warning{
+					Category: warnings.CategoryRateLimit,
+					Message:  "GitHub rate limit hit during tag resolution; remaining tags skipped",
+					Err:      err,
+				})
+				continue
+			}
+			col.Emit(warnings.Warning{
+				Category: warnings.CategoryRateLimit,
+				Subject:  subjectFor(ref),
+				Message:  "tag resolution failed (treat as advisory)",
+				Err:      err,
+			})
+			continue
+		}
+
+		cache[key] = tag
+		ref.ResolvedTag = tag
 	}
 }
 
