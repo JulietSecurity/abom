@@ -165,10 +165,13 @@ func runScan(cmd *cobra.Command, args []string) error {
 		resolver.ResolveABOMRefs(abom, resolver.NewGitHubRefResolver(githubToken), col)
 	}
 
-	// Resolve tags for advisory-flagged SHA refs before SHA verification,
-	// which makes many API calls and can trigger secondary rate limits.
-	// Tag resolution only needs 0-2 calls (one per flagged ref), so it
-	// should run first while API budget is available.
+	// Resolve tags for advisory-flagged SHA refs so version comparison can
+	// clear false positives. Gated on --check (not --verify-shas) because
+	// tag resolution uses git ls-remote, which doesn't consume REST API
+	// quota — safe to run even without explicit opt-in to SHA verification.
+	// Runs before --verify-shas when both are set: SHA verification makes
+	// ~30 HEAD requests and can trigger secondary rate limits, while tag
+	// resolution only needs 0-2 calls (one per flagged ref).
 	if checkAdvisory && !offline && !noNetwork {
 		if !quiet {
 			fmt.Fprintln(os.Stderr, "Resolving advisory-flagged SHAs to upstream tags...")
