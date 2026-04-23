@@ -266,13 +266,6 @@ func (d *Database) RecheckSHARefs(abom *model.ABOM) {
 			}
 		}
 	}
-	// Also recheck collected actions in case they weren't reached via
-	// the workflow walk (e.g. transitive dependencies added later).
-	for _, ref := range abom.Actions {
-		if d.recheckAction(ref) {
-			changed = true
-		}
-	}
 	if changed {
 		count := 0
 		for _, ref := range abom.Actions {
