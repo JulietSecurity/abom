@@ -184,21 +184,17 @@ func (r *GitHubTagResolver) ResolveTag(owner, repo, sha string) (string, error) 
 	// workflows.
 	repoURL := fmt.Sprintf("https://github.com/%s/%s.git", owner, repo)
 
-	cmd := exec.Command("git", "ls-remote", "--tags", repoURL)
-	// Pass token via GIT_ASKPASS to avoid embedding it in the URL.
+	args := []string{"ls-remote", "--tags", repoURL}
 	if r.token != "" {
-		cmd.Env = append(os.Environ(),
-			fmt.Sprintf("GIT_ASKPASS_TOKEN=%s", r.token),
-			"GIT_TERMINAL_PROMPT=0",
-		)
-		// git ls-remote to public repos works without auth, but if a
-		// token is available it helps with private repos and rate limits.
-		cmd.Args = append(cmd.Args[:0],
-			"git",
-			"-c", fmt.Sprintf("http.extraHeader=Authorization: token %s", r.token),
-			"ls-remote", "--tags", repoURL,
-		)
+		// Pass token via http.extraHeader — same mechanism actions/checkout uses.
+		// Trade-off: the token is visible in the process argument list (ps/procfs).
+		// A GIT_ASKPASS credential helper would avoid that, but adds complexity
+		// for little gain in CI where the token is already in the environment.
+		args = append([]string{"-c", fmt.Sprintf("http.extraHeader=Authorization: token %s", r.token)}, args...)
 	}
+
+	cmd := exec.Command("git", args...)
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 
 	out, err := cmd.Output()
 	if err != nil {
