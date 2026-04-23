@@ -246,7 +246,6 @@ func ResolveABOMTags(abom *model.ABOM, r TagResolver, col *warnings.Collector) {
 		owner, repo, sha string
 	}
 	cache := make(map[cacheKey]string)
-	var rateLimited bool
 
 	for _, ref := range abom.Actions {
 		if ref.RefType != model.RefTypeSHA {
@@ -272,21 +271,8 @@ func ResolveABOMTags(abom *model.ABOM, r TagResolver, col *warnings.Collector) {
 			continue
 		}
 
-		if rateLimited {
-			continue
-		}
-
 		tag, err := r.ResolveTag(ref.Owner, ref.Repo, ref.Ref)
 		if err != nil {
-			if err == ErrVerifyRateLimit {
-				rateLimited = true
-				col.Emit(warnings.Warning{
-					Category: warnings.CategoryRateLimit,
-					Message:  "GitHub rate limit hit during tag resolution; remaining tags skipped",
-					Err:      err,
-				})
-				continue
-			}
 			col.Emit(warnings.Warning{
 				Category: warnings.CategoryRateLimit,
 				Subject:  subjectFor(ref),
