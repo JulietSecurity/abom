@@ -145,8 +145,9 @@ func runScan(cmd *cobra.Command, args []string) error {
 	}
 
 	// Check advisories
+	var db *advisory.Database
 	if checkAdvisory {
-		db := advisory.NewDatabase(advisory.LoadOptions{
+		db = advisory.NewDatabase(advisory.LoadOptions{
 			Offline: offline,
 			NoCache: noCache,
 			Quiet:   quiet,
@@ -173,13 +174,6 @@ func runScan(cmd *cobra.Command, args []string) error {
 			fmt.Fprintln(os.Stderr, "Resolving advisory-flagged SHAs to upstream tags...")
 		}
 		resolver.ResolveABOMTags(abom, resolver.NewGitHubTagResolver(githubToken), col)
-
-		db := advisory.NewDatabase(advisory.LoadOptions{
-			Offline: offline,
-			NoCache: true, // already cached from first load
-			Quiet:   true,
-			Token:   githubToken,
-		})
 		db.RecheckSHARefs(abom)
 	}
 
