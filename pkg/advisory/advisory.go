@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	remoteURL    = "https://raw.githubusercontent.com/JulietSecurity/abom-advisories/main/db/advisories.json"
+	remoteURL    = "https://advisories.juliet.sh/db/advisories.json"
 	cacheTTL     = 1 * time.Hour
 	fetchTimeout = 5 * time.Second
 
