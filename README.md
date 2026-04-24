@@ -52,7 +52,7 @@ Every post-incident guide from CrowdStrike, Wiz, Snyk, and Microsoft tells you t
 - **SHA verification** — optionally verify that pinned SHAs are actually reachable from the upstream repo, catching fork-sourced and force-pushed-away commits (`--verify-shas`)
 - **Ref resolution** — optionally resolve tag and branch refs to the commit SHA they point to at BOM-generation time, turning a mutable-tag BOM into a stable evidentiary record (`--resolve-refs`)
 - **CI gate** — exits non-zero when compromised actions are found or (with `--fail-on-warnings`) when any advisory warning is emitted
-- **Fast** — caches resolved actions locally, uses `raw.githubusercontent.com` to avoid API rate limits
+- **Fast** — caches resolved actions locally and fetches action content directly from `raw.githubusercontent.com` to avoid API rate limits
 
 ## Installation
 
@@ -190,13 +190,12 @@ Output (JSON) gets a stable record of what was actually resolved at generation t
 `abom --check` compares your ABOM against known-compromised actions:
 
 - **Built-in** — a snapshot ships with every release. Works fully offline.
-- **Auto-updated** — fetches the latest data from [`JulietSecurity/abom-advisories`](https://github.com/JulietSecurity/abom-advisories) at runtime.
+- **Auto-updated** — fetches the latest data from [`advisories.juliet.sh`](https://advisories.juliet.sh/db/advisories.json) at runtime. Source and contributions at [`JulietSecurity/abom-advisories`](https://github.com/JulietSecurity/abom-advisories).
 - **Community-curated** — anyone can submit a PR to add a new advisory.
 
-Current advisories:
-| ID | CVE | Description |
-|----|-----|-------------|
-| ABOM-2026-001 | CVE-2026-33634 | Trivy GitHub Actions supply chain compromise |
+**SHA-pinned actions and advisories.** When `--check` encounters a SHA-pinned action that matches an advisory's affected package, `abom` resolves the SHA to its upstream tag (via `git ls-remote`, which doesn't consume REST API quota) and compares that tag against the advisory's affected version ranges. Refs at fixed versions are cleared; refs that fall inside the affected range are flagged with a definitive advisory ID instead of the older "verify manually" annotation. No extra flags required — this runs automatically whenever `--check` is used with network access.
+
+See [advisories.juliet.sh/db/advisories.json](https://advisories.juliet.sh/db/advisories.json) for the current advisory list.
 
 ## All flags
 
